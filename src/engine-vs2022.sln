@@ -91,6 +91,7 @@ EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "scripts", "scripts", "{8EC462FD-D22E-90A8-E5CE-7E832BA40C5D}"
 	ProjectSection(SolutionItems) = preProject
 		..\gamedata\scripts\aaaa_script_fixes_mp.script = ..\gamedata\scripts\aaaa_script_fixes_mp.script
+			..\gamedata\scripts\coop_core.script = ..\gamedata\scripts\coop_core.script
 		..\gamedata\scripts\aaa_sound_object_patch.script = ..\gamedata\scripts\aaa_sound_object_patch.script
 		..\gamedata\scripts\axr_beh_patches.script = ..\gamedata\scripts\axr_beh_patches.script
 		..\gamedata\scripts\axr_main.script = ..\gamedata\scripts\axr_main.script
@@ -264,6 +265,8 @@ EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "luabind", "3rd party\luabind\luabind.vcxproj", "{8FDD9DAC-8E9F-677E-C93A-81986A581F89}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "giflib", "3rd party\giflib\giflib.vcxproj", "{DB4ECFCD-1F1F-4436-8A44-95FCC20C91E9}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "xrCoopNet", "xrCoopNet\xrCoopNet.vcxproj", "{F8A3B4C2-7E1D-4F9A-B5C3-8D2E6A1F1B9E}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -1283,6 +1286,36 @@ Global
 		{DB4ECFCD-1F1F-4436-8A44-95FCC20C91E9}.VerifiedDX8|x64.Build.0 = Verified|x64
 		{DB4ECFCD-1F1F-4436-8A44-95FCC20C91E9}.VerifiedDX9|x64.ActiveCfg = Verified|x64
 		{DB4ECFCD-1F1F-4436-8A44-95FCC20C91E9}.VerifiedDX9|x64.Build.0 = Verified|x64
+		{F8A3B4C2-7E1D-4F9A-B5C3-8D2E6A1F1B9E}.DX10|x64.ActiveCfg = Release|x64
+		{F8A3B4C2-7E1D-4F9A-B5C3-8D2E6A1F1B9E}.DX10|x64.Build.0 = Release|x64
+		{F8A3B4C2-7E1D-4F9A-B5C3-8D2E6A1F1B9E}.DX10-AVX|x64.ActiveCfg = Release-AVX|x64
+		{F8A3B4C2-7E1D-4F9A-B5C3-8D2E6A1F1B9E}.DX10-AVX|x64.Build.0 = Release-AVX|x64
+		{F8A3B4C2-7E1D-4F9A-B5C3-8D2E6A1F1B9E}.DX11|x64.ActiveCfg = Release|x64
+		{F8A3B4C2-7E1D-4F9A-B5C3-8D2E6A1F1B9E}.DX11|x64.Build.0 = Release|x64
+		{F8A3B4C2-7E1D-4F9A-B5C3-8D2E6A1F1B9E}.DX11-AVX|x64.ActiveCfg = Release-AVX|x64
+		{F8A3B4C2-7E1D-4F9A-B5C3-8D2E6A1F1B9E}.DX11-AVX|x64.Build.0 = Release-AVX|x64
+		{F8A3B4C2-7E1D-4F9A-B5C3-8D2E6A1F1B9E}.DX8|x64.ActiveCfg = Release|x64
+		{F8A3B4C2-7E1D-4F9A-B5C3-8D2E6A1F1B9E}.DX8|x64.Build.0 = Release|x64
+		{F8A3B4C2-7E1D-4F9A-B5C3-8D2E6A1F1B9E}.DX8-AVX|x64.ActiveCfg = Release-AVX|x64
+		{F8A3B4C2-7E1D-4F9A-B5C3-8D2E6A1F1B9E}.DX8-AVX|x64.Build.0 = Release-AVX|x64
+		{F8A3B4C2-7E1D-4F9A-B5C3-8D2E6A1F1B9E}.DX9|x64.ActiveCfg = Release|x64
+		{F8A3B4C2-7E1D-4F9A-B5C3-8D2E6A1F1B9E}.DX9|x64.Build.0 = Release|x64
+		{F8A3B4C2-7E1D-4F9A-B5C3-8D2E6A1F1B9E}.DX9-AVX|x64.ActiveCfg = Release-AVX|x64
+		{F8A3B4C2-7E1D-4F9A-B5C3-8D2E6A1F1B9E}.DX9-AVX|x64.Build.0 = Release-AVX|x64
+		{F8A3B4C2-7E1D-4F9A-B5C3-8D2E6A1F1B9E}.ProfiledDX11|x64.ActiveCfg = ProfiledDX11|x64
+		{F8A3B4C2-7E1D-4F9A-B5C3-8D2E6A1F1B9E}.ProfiledDX11|x64.Build.0 = ProfiledDX11|x64
+		{F8A3B4C2-7E1D-4F9A-B5C3-8D2E6A1F1B9E}.Release|x64.ActiveCfg = Release|x64
+		{F8A3B4C2-7E1D-4F9A-B5C3-8D2E6A1F1B9E}.Release|x64.Build.0 = Release|x64
+		{F8A3B4C2-7E1D-4F9A-B5C3-8D2E6A1F1B9E}.Release-AVX|x64.ActiveCfg = Release-AVX|x64
+		{F8A3B4C2-7E1D-4F9A-B5C3-8D2E6A1F1B9E}.Release-AVX|x64.Build.0 = Release-AVX|x64
+		{F8A3B4C2-7E1D-4F9A-B5C3-8D2E6A1F1B9E}.Verified|x64.ActiveCfg = Verified|x64
+		{F8A3B4C2-7E1D-4F9A-B5C3-8D2E6A1F1B9E}.Verified|x64.Build.0 = Verified|x64
+		{F8A3B4C2-7E1D-4F9A-B5C3-8D2E6A1F1B9E}.VerifiedDX11|x64.ActiveCfg = VerifiedDX11|x64
+		{F8A3B4C2-7E1D-4F9A-B5C3-8D2E6A1F1B9E}.VerifiedDX11|x64.Build.0 = VerifiedDX11|x64
+		{F8A3B4C2-7E1D-4F9A-B5C3-8D2E6A1F1B9E}.VerifiedDX9|x64.ActiveCfg = Verified|x64
+		{F8A3B4C2-7E1D-4F9A-B5C3-8D2E6A1F1B9E}.VerifiedDX9|x64.Build.0 = Verified|x64
+		{F8A3B4C2-7E1D-4F9A-B5C3-8D2E6A1F1B9E}.VerifiedDX8|x64.ActiveCfg = Verified|x64
+		{F8A3B4C2-7E1D-4F9A-B5C3-8D2E6A1F1B9E}.VerifiedDX8|x64.Build.0 = Verified|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

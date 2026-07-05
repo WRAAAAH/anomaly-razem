@@ -1,0 +1,128 @@
+-- coop_phantom.script
+-- Owns the lifecycle of phantom entities: one real "coop_phantom" ALife object
+-- (gamedata/configs/creatures/coop_phantom.ltx) per remote player, spawned on
+-- coop_core.subscribe_player_joined and released on coop_core.subscribe_player_left.
+--
+-- Position/rotation come straight from network samples (coop_actor_sync.script).
+-- Walk/run/stand animation isn't sent over the network -- the local actor's own
+-- movement state isn't reliably readable the same way an NPC's is (those getters
+-- require a CAI_Stalker, and the actor is a different class), so it's instead
+-- derived here from the position delta between consecutive samples.
+--
+-- NOTE: like every *.script file, this one runs inside its own namespace
+-- table (see coop_core.script's header comment) -- everything defined here
+-- as a "bare global" is really coop_phantom.<name>. Calls into coop_core
+-- must be qualified (coop_core.xxx).
+
+local PHANTOM_SECTION = "coop_phantom"
+
+local WALK_SPEED_THRESHOLD = 0.3  -- m/s below this = standing
+local RUN_SPEED_THRESHOLD  = 2.2  -- m/s at/above this = running
+
+-- player_id -> { se_id, pos={x,y,z}, dir={x,y,z}, body, move, sample_time }
+local phantoms      = {}
+
+local function spawn_phantom(player_id)
+    if not db.actor or phantoms[player_id] then return end
+
+    local lv_id = db.actor:level_vertex_id()
+    local gv_id = db.actor:game_vertex_id()
+    local pos   = db.actor:position()
+
+    local se_obj = alife_create(PHANTOM_SECTION, pos, lv_id, gv_id)
+    if not se_obj then
+        printf("![COOP] failed to spawn phantom for player %s", tostring(player_id))
+        return
+    end
+
+    phantoms[player_id] = { se_id = se_obj.id }
+    printf("[COOP] spawned phantom for player %s (id=%s)", tostring(player_id), tostring(se_obj.id))
+end
+
+local function despawn_phantom(player_id)
+    local p = phantoms[player_id]
+    if not p then return end
+
+    phantoms[player_id] = nil
+
+    if alife_object(p.se_id) then
+        alife_release_id(p.se_id)
+    end
+    printf("[COOP] despawned phantom for player %s", tostring(player_id))
+end
+
+-- NOTE: these are flat, directly on `move` (not nested under move.body/move.move
+-- as the enum_() group names might suggest) -- "body" and "move" are already
+-- taken as instance-method names on the same class (object:body()/object:move()),
+-- which take priority, so move.body/move.move resolve to those methods, not
+-- the enum sub-tables. See script_movement_action_script.cpp.
+local function classify_movement(speed)
+    if speed < WALK_SPEED_THRESHOLD then
+        return move.standing, move.stand
+    elseif speed < RUN_SPEED_THRESHOLD then
+        return move.standing, move.walk
+    else
+        return move.standing, move.run
+    end
+end
+
+-- Called by coop_actor_sync.script whenever a POS update arrives for player_id.
+function on_position(player_id, x, y, z, dx, dy, dz)
+    local p = phantoms[player_id]
+    if not p then return end
+
+    local now = time_global()
+    if p.pos then
+        local dt = (now - p.sample_time) / 1000
+        if dt > 0 then
+            local ddx, ddy, ddz = x - p.pos.x, y - p.pos.y, z - p.pos.z
+            local dist  = math.sqrt(ddx * ddx + ddy * ddy + ddz * ddz)
+            p.body, p.move = classify_movement(dist / dt)
+        end
+    else
+        p.body, p.move = move.standing, move.stand
+    end
+
+    p.pos = { x = x, y = y, z = z }
+    p.dir = { x = dx, y = dy, z = dz }
+    p.sample_time = now
+end
+
+-- NOTE: this used to be driven by RegisterScriptCallback("npc_on_update", ...),
+-- which looked like the obvious per-NPC-per-frame hook but never actually
+-- fired: RegisterScriptCallback/SendScriptCallback are true globals defined
+-- once in dynamic_callbacks.lua (loaded via LoadKernelScriptToGlobal, NOT the
+-- namespaced *.script path), and that file's own `intercepts` table only
+-- recognizes "save"/"load"/"update"/"save_state"/"load_state" -- registering
+-- under any other name (like "npc_on_update") is a silent no-op. axr_main.script
+-- separately *lists* npc_on_update in its own callback table, but nothing in
+-- this codebase (Lua or C++) ever calls axr_main.make_callback("npc_on_update", ...)
+-- either, so that path is equally dead. Net effect: force_set_position/rotation
+-- were never being called at all -- the phantom was running on pure default AI.
+-- Fix: apply every tracked phantom's latest sample ourselves, off the
+-- actor_on_update tick we already know fires (same one send_local_position uses).
+local function update_phantoms()
+    for _, p in pairs(phantoms) do
+        if p.pos then
+            local npc = level.object_by_id(p.se_id)
+            if npc then
+                -- `enable=false`: still moves the transform (M.c = pos happens
+                -- unconditionally in ForceSetPosition/ForceSetRotation), just
+                -- without reactivating the physics shell -- avoids the solver
+                -- fighting us over geometry overlap (worse indoors).
+                npc:force_set_position(vector():set(p.pos.x, p.pos.y, p.pos.z), false)
+                npc:force_set_rotation(vector():set(p.dir.x, p.dir.y, p.dir.z), false)
+                npc:set_body_state(p.body)
+                npc:set_movement_type(p.move)
+            end
+        end
+    end
+end
+
+-- Called by coop_core.script right after a session actually starts
+-- (coop_core.host()/coop_core.connect()), not via axr_main's on_game_start.
+function init()
+    coop_core.subscribe_player_joined(spawn_phantom)
+    coop_core.subscribe_player_left(despawn_phantom)
+    axr_main.callback_set("actor_on_update", update_phantoms)
+end

@@ -18,6 +18,9 @@ lua51.exp
 lua51.lib
 luajit.exe
 
+# fetched via src/xrCoopNet/get_enet.bat (nested git clone, not vendored)
+src/xrCoopNet/enet/
+
 # luajit generated files
 src/3rd party/luajit-2/src/lj_bcdef.h
 src/3rd party/luajit-2/src/lj_ffdef.h

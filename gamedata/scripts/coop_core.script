@@ -1,0 +1,303 @@
+-- coop_core.script
+-- Master bootstrap for seamless coop.
+--
+-- IMPORTANT: this engine wraps every loaded *.script file in a private
+-- namespace table (see script_storage.cpp's file_header: it creates a table,
+-- assigns it to a global matching the filename -- e.g. `coop_core` -- with
+-- `__index = _G` for reads, then setfenv(1, ...)'s the whole file onto it).
+-- That means every "bare global" function defined here (is_host, host,
+-- subscribe_receive, etc.) is actually stored as coop_core.is_host,
+-- coop_core.host, coop_core.subscribe_receive, ... automatically -- NOT a
+-- true global. Do NOT declare `coop_core = {}` here (that shadows the
+-- auto-created namespace table with a nested one and breaks everything).
+-- Other files must call these qualified, e.g. coop_core.host(27015).
+--
+-- Console usage (open dev console with the game launched with -dbg):
+--   run_string coop_core.host()                  -- host on default port
+--   run_string coop_core.host(27016)              -- host on a specific port
+--   run_string coop_core.connect("127.0.0.1")             -- connect, default port
+--   run_string coop_core.connect("127.0.0.1", 27016)      -- connect, specific port
+
+local COOP_DEFAULT_PORT = 27015
+
+-- Module-level state
+local coop_mod      = nil   -- native coop module (loaded from coop.dll)
+local role          = nil   -- "host" | "client" | nil
+local host_port     = COOP_DEFAULT_PORT
+local server_ip     = nil
+local server_port   = COOP_DEFAULT_PORT
+local initialized   = false
+
+-- Player roster. player_id 0 is always the host; clients are assigned
+-- 1..N by the host (reusing the ENet peer_id, since the host already hands
+-- out unique peer ids). my_id is 0 for the host, and nil on a client
+-- until its WELCOME message arrives.
+local my_id     = nil
+local players   = {}   -- player_id -> true, excludes my_id
+
+-- Registered subsystem packet handlers (set by other coop_*.script files)
+local _on_connect_handlers       = {}
+local _on_disconnect_handlers    = {}
+local _on_receive_handlers       = {}
+local _on_player_joined_handlers = {}
+local _on_player_left_handlers   = {}
+
+-- -------------------------------------------------------------------------
+-- Public API used by other coop scripts (call as coop_core.<name>(...))
+-- -------------------------------------------------------------------------
+
+function is_host()   return role == "host"   end
+function is_client()   return role == "client" end
+function is_active() return initialized       end
+
+function get_my_player_id() return my_id end
+function get_players()      return players end
+
+-- Called by subsystems to subscribe to network events
+function subscribe_receive(fn)       _on_receive_handlers[#_on_receive_handlers+1]       = fn end
+function subscribe_connect(fn)       _on_connect_handlers[#_on_connect_handlers+1]       = fn end
+function subscribe_disconnect(fn)    _on_disconnect_handlers[#_on_disconnect_handlers+1] = fn end
+
+-- Fired with (player_id) once a player (host or client, never ourselves) is
+-- known to be part of the session -- the right time for coop_phantom to spawn.
+function subscribe_player_joined(fn) _on_player_joined_handlers[#_on_player_joined_handlers+1] = fn end
+function subscribe_player_left(fn)   _on_player_left_handlers[#_on_player_left_handlers+1]     = fn end
+
+-- Convenience send wrappers
+function send_reliable(peer_id, data)
+    return coop_mod.send_reliable(peer_id, coop_mod.channel_rel(), data)
+end
+function send_unreliable(peer_id, data)
+    return coop_mod.send_unreliable(peer_id, coop_mod.channel_unrel(), data)
+end
+function broadcast_reliable(data, exclude)
+    return coop_mod.broadcast_reliable(coop_mod.channel_rel(), data, exclude or -1)
+end
+function broadcast_unreliable(data, exclude)
+    return coop_mod.broadcast_unreliable(coop_mod.channel_unrel(), data, exclude or -1)
+end
+
+-- Simple "TYPE|arg|arg|..." wire format shared by all coop_* subsystems.
+function msg_pack(...)
+    return table.concat({...}, "|")
+end
+function msg_unpack(data)
+    return str_explode(data, "|")
+end
+
+-- -------------------------------------------------------------------------
+-- Player roster bookkeeping
+-- -------------------------------------------------------------------------
+local function add_player(player_id)
+    if player_id == my_id or players[player_id] then return end
+    players[player_id] = true
+    printf("[COOP] player joined: " .. tostring(player_id))
+    for _, fn in ipairs(_on_player_joined_handlers) do
+        local ok, err = pcall(fn, player_id)
+        if not ok then printf("![COOP] on_player_joined error: " .. tostring(err)) end
+    end
+end
+
+local function remove_player(player_id)
+    if not players[player_id] then return end
+    players[player_id] = nil
+    printf("[COOP] player left: " .. tostring(player_id))
+    for _, fn in ipairs(_on_player_left_handlers) do
+        local ok, err = pcall(fn, player_id)
+        if not ok then printf("![COOP] on_player_left error: " .. tostring(err)) end
+    end
+end
+
+-- -------------------------------------------------------------------------
+-- Event handlers, dispatched from actor_on_update's poll_events() loop below
+-- -------------------------------------------------------------------------
+local function on_connect(peer_id)
+    printf("[COOP] peer connected: " .. tostring(peer_id))
+
+    if role == "host" then
+        -- Tell the new peer its assigned player id (== its ENet peer_id).
+        send_reliable(peer_id, msg_pack("WELCOME", peer_id))
+        -- Tell the new peer about everyone already in the session.
+        for existing_id, _ in pairs(players) do
+            send_reliable(peer_id, msg_pack("JOINED", existing_id))
+        end
+        -- Tell everyone else about the new peer.
+        broadcast_reliable(msg_pack("JOINED", peer_id), peer_id)
+        add_player(peer_id)
+    end
+
+    for _, fn in ipairs(_on_connect_handlers) do
+        local ok, err = pcall(fn, peer_id)
+        if not ok then printf("![COOP] on_connect error: " .. tostring(err)) end
+    end
+end
+
+local function on_disconnect(peer_id)
+    printf("[COOP] peer disconnected: " .. tostring(peer_id))
+
+    if role == "host" then
+        remove_player(peer_id)
+        broadcast_reliable(msg_pack("LEFT", peer_id))
+    end
+
+    for _, fn in ipairs(_on_disconnect_handlers) do
+        local ok, err = pcall(fn, peer_id)
+        if not ok then printf("![COOP] on_disconnect error: " .. tostring(err)) end
+    end
+end
+
+-- player_id 0 (the host) never announces itself via JOINED -- both the host's
+-- own client and every connecting client add it as soon as the session starts.
+local function handle_roster_message(msg_type, parts)
+    if msg_type == "WELCOME" then
+        my_id = tonumber(parts[2])
+        printf("[COOP] assigned player_id=" .. tostring(my_id))
+        add_player(0)
+    elseif msg_type == "JOINED" then
+        add_player(tonumber(parts[2]))
+    elseif msg_type == "LEFT" then
+        remove_player(tonumber(parts[2]))
+    end
+end
+
+local function on_receive(peer_id, channel, data)
+    local msg_type = data:match("^(%u+)|")
+    if msg_type == "WELCOME" or msg_type == "JOINED" or msg_type == "LEFT" then
+        handle_roster_message(msg_type, msg_unpack(data))
+        return
+    end
+
+    for _, fn in ipairs(_on_receive_handlers) do
+        local ok, err = pcall(fn, peer_id, channel, data)
+        if not ok then printf("![COOP] on_receive error: " .. tostring(err)) end
+    end
+end
+
+-- -------------------------------------------------------------------------
+-- Initialization
+-- -------------------------------------------------------------------------
+local function try_load_coop_module()
+    local ok, mod = pcall(require, "coop")
+    if not ok then
+        printf("![COOP] Failed to load coop.dll: " .. tostring(mod))
+        printf("![COOP] Make sure coop.dll is in the game bin directory and ENet was fetched.")
+        return false
+    end
+    coop_mod = mod
+    printf("[COOP] coop.dll loaded OK")
+    return true
+end
+
+-- Explicitly initializes the other coop_* subsystems, rather than relying on
+-- axr_main's own on_game_start auto-discovery -- that mechanism depends on
+-- every script correctly using its auto-namespaced bare-global convention,
+-- which is easy to get subtly wrong (see the header comment above), and its
+-- reliability in this build hasn't been reconfirmed since. Calling these
+-- directly, from here, right after a session actually starts, sidesteps it.
+local function init_subsystems()
+    local ok, err = pcall(function() coop_actor_sync.init() end)
+    if not ok then printf("![COOP] coop_actor_sync.init() error: " .. tostring(err)) end
+
+    ok, err = pcall(function() coop_phantom.init() end)
+    if not ok then printf("![COOP] coop_phantom.init() error: " .. tostring(err)) end
+end
+
+local function start_session()
+    if not try_load_coop_module() then return end
+
+    if role == "host" then
+        if coop_mod.host(host_port) then
+            initialized = true
+            my_id        = 0
+            printf(string.format("[COOP] Hosting on port %d (UDP)", host_port))
+            init_subsystems()
+        else
+            printf("[COOP] Failed to open ENet host on port " .. tostring(host_port))
+        end
+    elseif role == "client" then
+        if coop_mod.connect(server_ip, server_port) then
+            initialized = true
+            printf(string.format("[COOP] Connecting to %s:%d...", server_ip, server_port))
+            init_subsystems()
+        else
+            printf("[COOP] Failed to initiate connection to " .. server_ip .. ":" .. tostring(server_port))
+        end
+    end
+end
+
+-- Fires every game frame -- drains the ENet event queue and dispatches each
+-- queued event to the matching local handler.
+--
+-- NOTE: this used to register on_connect/on_disconnect/on_receive as native
+-- callbacks (coop_mod.set_on_receive(fn) etc.), stored via luaL_ref into
+-- LUA_REGISTRYINDEX and invoked later from C++ via lua_pcall. That turned out
+-- to be unreliable in this engine build -- calling back into Lua from native
+-- code intermittently landed on an unrelated bound C++ object instead of our
+-- closure (a LuaBind "No such operator [__call] defined in class
+-- [evaluator_contact]" error), almost certainly because coop.dll's statically
+-- linked LuaJIT isn't fully ABI-compatible with the game's own. Simple stack
+-- pushes (what host()/connect()/send() already used) are fine; storing and
+-- later invoking a Lua closure from native code is not. Polling for plain
+-- data (coop_mod.poll_events() returns an ordinary table) sidesteps the
+-- problem entirely -- see CoopNet.h's CoopEvent comment for the full story.
+-- Signature: (binder, delta)
+local function actor_on_update(binder, delta)
+    if not initialized or not coop_mod then return end
+
+    coop_mod.pump()
+
+    for _, ev in ipairs(coop_mod.poll_events()) do
+        if ev.type == "connect" then
+            on_connect(ev.peer_id)
+        elseif ev.type == "disconnect" then
+            on_disconnect(ev.peer_id)
+        elseif ev.type == "receive" then
+            on_receive(ev.peer_id, ev.channel, ev.data)
+        end
+    end
+end
+
+-- -------------------------------------------------------------------------
+-- Console-callable entry points -- call as coop_core.host()/coop_core.connect(ip)
+-- from the developer console (launch the game with -dbg to unlock run_string).
+-- -------------------------------------------------------------------------
+function host(port)
+    if initialized then
+        printf("![COOP] already initialized (role=%s), ignoring host()", tostring(role))
+        return
+    end
+    role      = "host"
+    host_port = port and tonumber(port) or COOP_DEFAULT_PORT
+    axr_main.callback_set("actor_on_update", actor_on_update)
+    start_session()
+end
+
+function connect(ip, port)
+    if initialized then
+        printf("![COOP] already initialized (role=%s), ignoring connect()", tostring(role))
+        return
+    end
+    if not ip then
+        printf("![COOP] usage: coop_core.connect(\"127.0.0.1\"[, port])")
+        return
+    end
+    role        = "client"
+    server_ip   = ip
+    server_port = port and tonumber(port) or COOP_DEFAULT_PORT
+    axr_main.callback_set("actor_on_update", actor_on_update)
+    start_session()
+end
+
+-- -------------------------------------------------------------------------
+-- Short console shortcuts. `run_string` executes in the true, un-namespaced
+-- _G (see the header comment) -- a bare `function test_coop_host()` here
+-- would land in coop_core's own namespace table like everything else and be
+-- just as invisible from console as `host()` is. Writing into `_G` explicitly
+-- bypasses that: `_G` itself is a *read* (falls through to the real global
+-- table via __index), and assigning a field onto it is a normal table write,
+-- not subject to setfenv's redirection.
+--   run_string test_coop_host()
+--   run_string test_coop_connect()   -- always dials 127.0.0.1
+-- -------------------------------------------------------------------------
+_G.test_coop_host    = function() host() end
+_G.test_coop_connect = function() connect("127.0.0.1") end

@@ -1,0 +1,70 @@
+-- coop_actor_sync.script
+-- Samples the local actor's transform at a fixed rate and broadcasts it over
+-- the unreliable channel; applies received transforms to coop_phantom.
+--
+-- Wire format: "POS|player_id|x|y|z|dx|dy|dz" (dx/dy/dz is whatever Fvector
+-- object:direction() returns -- treated as an opaque triple here, since it's
+-- reconstructed via the same vector():set() on the receiving end).
+--
+-- NOTE: like every *.script file, this one runs inside its own namespace
+-- table (see coop_core.script's header comment) -- everything defined here
+-- as a "bare global" is really coop_actor_sync.<name>. Calls into coop_core
+-- or coop_phantom must be qualified (coop_core.xxx / coop_phantom.xxx).
+
+local SYNC_INTERVAL_MS = 50 -- ~20Hz
+
+local last_sync_time = 0
+
+local function pack_pos(player_id, pos, dir)
+    return coop_core.msg_pack("POS", player_id,
+        string.format("%.3f", pos.x), string.format("%.3f", pos.y), string.format("%.3f", pos.z),
+        string.format("%.4f", dir.x), string.format("%.4f", dir.y), string.format("%.4f", dir.z))
+end
+
+local function send_local_position()
+    local my_id = coop_core.get_my_player_id()
+    if not my_id then return end -- client hasn't received WELCOME yet
+
+    local msg = pack_pos(my_id, db.actor:position(), db.actor:direction())
+
+    if coop_core.is_host() then
+        coop_core.broadcast_unreliable(msg)
+    else
+        coop_core.send_unreliable(0, msg) -- 0 = the host, from a client's connection
+    end
+end
+
+local function on_actor_update(binder, delta)
+    if not coop_core.is_active() then return end
+
+    local now = time_global()
+    if now - last_sync_time < SYNC_INTERVAL_MS then return end
+    last_sync_time = now
+
+    send_local_position()
+end
+
+local function on_receive(peer_id, channel, data)
+    local parts = coop_core.msg_unpack(data)
+    if parts[1] ~= "POS" then return end
+
+    local player_id = tonumber(parts[2])
+    if player_id == coop_core.get_my_player_id() then return end -- stale echo, ignore
+
+    coop_phantom.on_position(player_id,
+        tonumber(parts[3]), tonumber(parts[4]), tonumber(parts[5]),
+        tonumber(parts[6]), tonumber(parts[7]), tonumber(parts[8]))
+
+    -- The host relays each client's position to every other client; a client
+    -- only ever talks to the host, so it never needs to relay.
+    if coop_core.is_host() then
+        coop_core.broadcast_unreliable(data, peer_id)
+    end
+end
+
+-- Called by coop_core.script right after a session actually starts
+-- (coop_core.host()/coop_core.connect()), not via axr_main's on_game_start.
+function init()
+    axr_main.callback_set("actor_on_update", on_actor_update)
+    coop_core.subscribe_receive(on_receive)
+end

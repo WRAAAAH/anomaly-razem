@@ -1,0 +1,18 @@
+; coop_phantom.ltx
+; Visual stand-in for a remote player, puppeted every frame by coop_phantom.script
+; from network position/rotation samples (see coop_actor_sync.script).
+;
+; Inherits the stock [stalker] class wholesale (gamedata/configs/creatures/m_stalker.ltx
+; in the base Anomaly install) rather than a custom native class, so spawning only
+; needs the well-established alife_create() path. Known limitations, acceptable for
+; this phase and worth revisiting later:
+;   - this is an ordinary ALife object and currently WILL be written into the host's
+;     savegame (no can_save()-style override yet, see se_projector.script for the
+;     pattern to add one later).
+;   - its own AI/behavior tree keeps running underneath; nothing suppresses it, so it
+;     can still look around / react to nearby danger between position corrections.
+;     coop_phantom.script overrides position/rotation/animation every frame from its
+;     own actor_on_update tick (see update_phantoms() there) -- not a per-NPC hook,
+;     since RegisterScriptCallback("npc_on_update", ...) turned out to never fire.
+[coop_phantom]:stalker
+$spawn = "stalkers\coop_phantom"
