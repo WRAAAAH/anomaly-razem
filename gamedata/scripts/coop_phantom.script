@@ -3,7 +3,16 @@
 -- (gamedata/configs/creatures/coop_phantom.ltx) per remote player, spawned on
 -- coop_core.subscribe_player_joined and released on coop_core.subscribe_player_left.
 --
--- Position/rotation come straight from network samples (coop_actor_sync.script).
+-- Position/rotation come from network samples (coop_actor_sync.script), arriving
+-- at ~20Hz (every ~50ms). update_phantoms() runs every frame (much faster), so
+-- rather than snapping straight to whatever the latest sample says (visible as
+-- jitter/teleporting), each phantom interpolates between the previous and the
+-- latest received sample over the real measured gap between them -- standard
+-- snapshot interpolation, trading ~one sample interval of latency for smooth
+-- motion. If a new sample hasn't arrived by the time interpolation catches up
+-- (packet loss/lag spike), the phantom just holds still at the last known good
+-- position rather than jittering or extrapolating into a wall.
+--
 -- Walk/run/stand animation isn't sent over the network -- the local actor's own
 -- movement state isn't reliably readable the same way an NPC's is (those getters
 -- require a CAI_Stalker, and the actor is a different class), so it's instead
@@ -19,8 +28,47 @@ local PHANTOM_SECTION = "coop_phantom"
 local WALK_SPEED_THRESHOLD = 0.3  -- m/s below this = standing
 local RUN_SPEED_THRESHOLD  = 2.2  -- m/s at/above this = running
 
--- player_id -> { se_id, pos={x,y,z}, dir={x,y,z}, body, move, sample_time }
+-- Matches coop_actor_sync.script's SYNC_INTERVAL_MS (the sender's real, fixed
+-- production rate). Used as a floor on the measured gap between receipts, not
+-- the gap itself -- if the receiving machine's own frame tick hitches (e.g.
+-- it's under load, such as running two game instances on one PC for testing)
+-- several queued samples can get processed back-to-back in the same frame,
+-- making the *measured* gap collapse to near-zero. Without a floor, that makes
+-- alpha (elapsed/duration) jump straight to 1 every time -- an instant snap,
+-- i.e. exactly the jitter this interpolation is supposed to remove. Genuine
+-- larger gaps (real lag spikes) still pass through uncapped below.
+local MIN_INTERP_MS = 50
+
+-- player_id -> { se_id, prev_pos/prev_dir={x,y,z}, target_pos/target_dir={x,y,z},
+--                target_time, interp_duration, body, move }
 local phantoms      = {}
+
+local function lerp_vec(a, b, t)
+    return {
+        x = a.x + (b.x - a.x) * t,
+        y = a.y + (b.y - a.y) * t,
+        z = a.z + (b.z - a.z) * t,
+    }
+end
+
+-- The network sample's dir field is a forward-facing unit VECTOR (the sender's
+-- camera look direction, device().cam_dir -- see coop_actor_sync.script), but
+-- object:force_set_rotation(vector, enable) does NOT take a direction vector
+-- -- it forwards straight into Fmatrix::setHPB(h, p, b), i.e. Heading/Pitch/
+-- Bank EULER ANGLES in radians (src/xrCore/_matrix.h). Feeding a raw
+-- (dx,dy,dz) into force_set_rotation as if it were (h,p,b) is a type mismatch
+-- -- it "worked" in the sense of not erroring, and didn't look obviously
+-- wrong at a glance, but never actually reproduced the real rotation.
+-- setHPB's forward column works out to
+-- k = (-cos(p)*sin(h), sin(p), cos(p)*cos(h)), so the inverse is
+-- h = atan2(-dx, dz), p = asin(dy); bank can't be recovered from a pure
+-- look-direction vector (it's rotation *around* that axis), and 0 is exactly
+-- right for a standing/walking humanoid anyway.
+local function dir_to_hpb(dir)
+    local y = dir.y
+    if y > 1 then y = 1 elseif y < -1 then y = -1 end -- guard asin domain
+    return math.atan2(-dir.x, dir.z), math.asin(y), 0
+end
 
 local function spawn_phantom(player_id)
     if not db.actor or phantoms[player_id] then return end
@@ -71,21 +119,29 @@ function on_position(player_id, x, y, z, dx, dy, dz)
     local p = phantoms[player_id]
     if not p then return end
 
-    local now = time_global()
-    if p.pos then
-        local dt = (now - p.sample_time) / 1000
+    local now      = time_global()
+    local new_pos  = { x = x, y = y, z = z }
+    local new_dir  = { x = dx, y = dy, z = dz }
+
+    if p.target_pos then
+        local dt = (now - p.target_time) / 1000
         if dt > 0 then
-            local ddx, ddy, ddz = x - p.pos.x, y - p.pos.y, z - p.pos.z
+            local ddx, ddy, ddz = x - p.target_pos.x, y - p.target_pos.y, z - p.target_pos.z
             local dist  = math.sqrt(ddx * ddx + ddy * ddy + ddz * ddz)
             p.body, p.move = classify_movement(dist / dt)
         end
+        p.prev_pos, p.prev_dir = p.target_pos, p.target_dir
+        p.interp_duration = math.max(now - p.target_time, MIN_INTERP_MS)
     else
+        -- First sample ever for this phantom -- nothing to interpolate from yet,
+        -- so prev == target and update_phantoms() will just snap to it once.
+        p.prev_pos, p.prev_dir = new_pos, new_dir
+        p.interp_duration = 0
         p.body, p.move = move.standing, move.stand
     end
 
-    p.pos = { x = x, y = y, z = z }
-    p.dir = { x = dx, y = dy, z = dz }
-    p.sample_time = now
+    p.target_pos, p.target_dir = new_pos, new_dir
+    p.target_time = now
 end
 
 -- NOTE: this used to be driven by RegisterScriptCallback("npc_on_update", ...),
@@ -102,16 +158,29 @@ end
 -- Fix: apply every tracked phantom's latest sample ourselves, off the
 -- actor_on_update tick we already know fires (same one send_local_position uses).
 local function update_phantoms()
+    local now = time_global()
     for _, p in pairs(phantoms) do
-        if p.pos then
+        if p.target_pos then
             local npc = level.object_by_id(p.se_id)
             if npc then
+                -- alpha=1 once we've caught up to the latest sample (or on the
+                -- very first sample, where interp_duration is 0) -- holds still
+                -- at the target rather than jittering if the next sample is late.
+                local alpha = 1
+                if p.interp_duration > 0 then
+                    alpha = math.min((now - p.target_time) / p.interp_duration, 1)
+                end
+
+                local pos = lerp_vec(p.prev_pos, p.target_pos, alpha)
+                local dir = lerp_vec(p.prev_dir, p.target_dir, alpha)
+                local h, pitch, bank = dir_to_hpb(dir)
+
                 -- `enable=false`: still moves the transform (M.c = pos happens
                 -- unconditionally in ForceSetPosition/ForceSetRotation), just
                 -- without reactivating the physics shell -- avoids the solver
                 -- fighting us over geometry overlap (worse indoors).
-                npc:force_set_position(vector():set(p.pos.x, p.pos.y, p.pos.z), false)
-                npc:force_set_rotation(vector():set(p.dir.x, p.dir.y, p.dir.z), false)
+                npc:force_set_position(vector():set(pos.x, pos.y, pos.z), false)
+                npc:force_set_rotation(vector():set(h, pitch, bank), false)
                 npc:set_body_state(p.body)
                 npc:set_movement_type(p.move)
             end
