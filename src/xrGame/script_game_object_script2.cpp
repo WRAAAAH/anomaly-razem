@@ -105,6 +105,8 @@ class_<CScriptGameObject> script_register_game_object1(class_<CScriptGameObject>
 		.def("mass", &CScriptGameObject::Mass)
 		.def("cost", SAFE_WRAP(&CScriptGameObject::Cost))
 		.def("condition", SAFE_WRAP(&CScriptGameObject::GetCondition))
+		.def("get_inv_grid_rect", SAFE_WRAP(&CScriptGameObject::GetInvGridRect))
+		.def("get_upgr_icon_rect", SAFE_WRAP(&CScriptGameObject::GetUpgrIconRect))
 		.def("set_condition", SAFE_WRAP(&CScriptGameObject::SetCondition))
 		.def("power_critical", SAFE_WRAP(&CScriptGameObject::GetPowerCritical))
 		.def("psy_factor", SAFE_WRAP(&CScriptGameObject::GetPsyFactor))
@@ -380,6 +382,7 @@ class_<CScriptGameObject> script_register_game_object1(class_<CScriptGameObject>
 
 		.def("register_in_combat", SAFE_WRAP(&CScriptGameObject::register_in_combat))
 		.def("unregister_in_combat", SAFE_WRAP(&CScriptGameObject::unregister_in_combat))
+		.def("make_enemy_visible", SAFE_WRAP(&CScriptGameObject::make_enemy_visible))
 		.def("find_best_cover", SAFE_WRAP(&CScriptGameObject::find_best_cover))
 
 		.def("use_smart_covers_only", SAFE_WRAP((bool (CScriptGameObject::*)() const)&CScriptGameObject::use_smart_covers_only))

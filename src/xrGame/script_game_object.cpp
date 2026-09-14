@@ -534,6 +534,25 @@ void CScriptGameObject::set_hud_fire_bone_silencer(LPCSTR bone_name)
 {
 	set_hud_fire_bone_silencer(bone_id(bone_name, true));
 }
+bool CScriptGameObject::hud_inertion_enabled() const
+{
+    CHudItem* item = smart_cast<CHudItem*>(&object());
+    if (!item)
+    {
+        return false;
+    }
+    return !!item->HudInertionEnabled();
+}
+
+void CScriptGameObject::set_hud_inertion_enabled(bool value)
+{
+    CHudItem* item = smart_cast<CHudItem*>(&object());
+    if (!item)
+    {
+        return;
+    }
+    item->SetHudInertionEnabled(value ? TRUE : FALSE);
+}
 
 u16 CScriptGameObject::bone_id(LPCSTR bone_name, bool bHud)
 {
@@ -735,6 +754,18 @@ bool CScriptGameObject::is_bone_visible(u16 bone_id, bool bHud)
 	return result;
 }
 
+#ifdef CBULLETMANAGER_EX
+bool CScriptGameObject::GetBulletCheckVisual()
+{
+    return object().GetBulletCheckVisual();
+}
+
+void CScriptGameObject::SetBulletCheckVisual(bool value)
+{
+    object().SetBulletCheckVisual(value);
+}
+#endif
+
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////
@@ -920,6 +951,34 @@ u32 CScriptGameObject::Cost() const
 		return (false);
 	}
 	return (inventory_item->Cost());
+}
+
+Frect CScriptGameObject::GetInvGridRect() const
+{
+	CInventoryItem* inventory_item = smart_cast<CInventoryItem*>(&object());
+	if (!inventory_item)
+	{
+		ai().script_engine().script_log(ScriptStorage::eLuaMessageTypeError,
+		                                "CInventoryItem : cannot access class member get_inv_grid_rect!");
+		return Frect().set(0.f, 0.f, 0.f, 0.f);
+	}
+
+	const Irect rect = inventory_item->GetInvGridRect();
+	return Frect().set(float(rect.x1), float(rect.y1), float(rect.x2), float(rect.y2));
+}
+
+Frect CScriptGameObject::GetUpgrIconRect() const
+{
+	CInventoryItem* inventory_item = smart_cast<CInventoryItem*>(&object());
+	if (!inventory_item)
+	{
+		ai().script_engine().script_log(ScriptStorage::eLuaMessageTypeError,
+		                                "CInventoryItem : cannot access class member get_upgr_icon_rect!");
+		return Frect().set(0.f, 0.f, 0.f, 0.f);
+	}
+
+	const Irect rect = inventory_item->GetUpgrIconRect();
+	return Frect().set(float(rect.x1), float(rect.y1), float(rect.x2), float(rect.y2));
 }
 
 float CScriptGameObject::GetCondition() const

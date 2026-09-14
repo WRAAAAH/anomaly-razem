@@ -25,8 +25,10 @@
 #include "object_handler_space.h"
 #include "memory_manager.h"
 #include "visual_memory_manager.h"
+#include "enemy_manager.h"
 #include "sound_memory_manager.h"
 #include "hit_memory_manager.h"
+#include "EntityCondition.h"
 #include "sight_manager.h"
 #include "stalker_movement_manager_smart_cover.h"
 #include "smart_cover.h"
@@ -148,6 +150,56 @@ void CScriptGameObject::SetVisualMemoryEnabled(bool enabled)
 		                                "CCustomMonster: cannot access class member ChangeTeam!");
 	else
 		custom_monster->memory().visual().enable(enabled);
+}
+
+void CScriptGameObject::set_vision_speed(float value)
+{
+	CCustomMonster* custom_monster = smart_cast<CCustomMonster*>(&object());
+	if (!custom_monster)
+		ai().script_engine().script_log(ScriptStorage::eLuaMessageTypeError,
+		                                "CCustomMonster : cannot access class member set_vision_speed!");
+	else
+		custom_monster->memory().visual().set_vision_speed(value);
+}
+
+void CScriptGameObject::set_visible_enemy_bias(float actor_bias, float npc_bias)
+{
+	CCustomMonster* custom_monster = smart_cast<CCustomMonster*>(&object());
+	if (!custom_monster)
+		ai().script_engine().script_log(ScriptStorage::eLuaMessageTypeError,
+                                    "CCustomMonster : cannot access class member set_visible_enemy_bias!");
+	else
+		custom_monster->memory().enemy().set_visible_enemy_bias(actor_bias, npc_bias);
+}
+
+void CScriptGameObject::set_hit_redirect(float max, float falloff)
+{
+	CCustomMonster* custom_monster = smart_cast<CCustomMonster*>(&object());
+	if (!custom_monster)
+		ai().script_engine().script_log(ScriptStorage::eLuaMessageTypeError,
+		                                "CCustomMonster : cannot access class member set_hit_redirect!");
+	else
+		custom_monster->memory().enemy().set_hit_redirect(max, falloff);
+}
+
+void CScriptGameObject::set_view_distance_factor(float value)
+{
+	CCustomMonster* custom_monster = smart_cast<CCustomMonster*>(&object());
+	if (!custom_monster)
+		ai().script_engine().script_log(ScriptStorage::eLuaMessageTypeError,
+		                                "CCustomMonster : cannot access class member set_view_distance_factor!");
+	else
+		custom_monster->memory().visual().set_view_distance_factor(value);
+}
+
+void CScriptGameObject::set_health_restore_boost(float value)
+{
+	CEntityAlive* entity_alive = smart_cast<CEntityAlive*>(&object());
+	if (!entity_alive)
+		ai().script_engine().script_log(ScriptStorage::eLuaMessageTypeError,
+		                                "CEntityAlive : cannot access class member set_health_restore_boost!");
+	else
+		entity_alive->conditions().set_health_restore_boost(value);
 }
 
 float CScriptGameObject::GetObjectVisibleDistance(const CScriptGameObject* obj)
